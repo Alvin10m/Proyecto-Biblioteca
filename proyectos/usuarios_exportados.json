@@ -1,0 +1,32 @@
+[
+    {
+        "id": "402-1957720-8",
+        "nombre": "Alvi Manuel González",
+        "tipo": "estudiante",
+        "contraseña": "Alvin10@"
+    },
+    {
+        "id": "40219577208",
+        "nombre": "Alvin González",
+        "tipo": "admin",
+        "contraseña": "Alvin10@"
+    },
+    {
+        "id": "1",
+        "nombre": "lopo",
+        "tipo": "estudiante",
+        "contraseña": "aa"
+    },
+    {
+        "id": null,
+        "nombre": "lopo",
+        "tipo": "docente",
+        "contraseña": "frea"
+    },
+    {
+        "id": null,
+        "nombre": "Alvin González",
+        "tipo": "admin",
+        "contraseña": "Alvin10@"
+    }
+]
