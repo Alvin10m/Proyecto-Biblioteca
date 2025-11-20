@@ -1,13 +1,19 @@
 import sqlite3
 
-def conectar():
-    return sqlite3.connect("biblioteca.db")
 
+# === Conexión a la base de datos ===
+
+def conectar():
+    return sqlite3.connect("Hope_library_system.db")
+
+
+
+# === Crear tablas iniciales ===
 def crear_tablas():
     conexion = conectar()
     cursor = conexion.cursor()
 
-    # Tabla de usuarios
+    # === Tabla de usuarios ===
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS usuarios (
         id TEXT PRIMARY KEY,
@@ -17,7 +23,7 @@ def crear_tablas():
     )
     """)
 
-    # Tabla de categorías
+    # === Tabla de categorías ===
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS categorias (
         id_categoria INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +31,7 @@ def crear_tablas():
     )
     """)
 
-    # Tabla de libros (con columna categoria_id)
+    # === Tabla de libros ===
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS libros (
         id_libro INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +49,7 @@ def crear_tablas():
     )
     """)
 
-    # Tabla de préstamos
+    # === Tabla de préstamos ===
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS prestamos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,19 +67,40 @@ def crear_tablas():
     conexion.close()
 
 
+# === Actualizar estructua ===
 def actualizar_tablas():
-    """
-    Agrega columnas nuevas si no existen,
-    sin borrar la base ni los datos anteriores.
-    """
     conexion = conectar()
     cursor = conexion.cursor()
 
-    # Ejemplo: agregar columna 'categoria_id' si no existía antes
-    columnas = [col[1] for col in cursor.execute("PRAGMA table_info(libros)").fetchall()]
-    if 'categoria_id' not in columnas:
-        cursor.execute("ALTER TABLE libros ADD COLUMN categoria_id INTEGER REFERENCES categorias(id_categoria)")
-        print("Columna 'categoria_id' agregada a la tabla libros.")
+    # === Tabla de libros ===
+    columnas_requeridas = {
+        "isbn": "TEXT",
+        "titulo": "TEXT",
+        "autor": "TEXT",
+        "editorial": "TEXT",
+        "categoria_id": "INTEGER",
+        "ubicacion": "TEXT",
+        "precio": "REAL",
+        "cantidad_total": "INTEGER",
+        "cantidad_disponible": "INTEGER",
+        "estado": "TEXT"
+    }
+
+    cursor.execute("PRAGMA table_info(libros)")
+    existentes = [col[1] for col in cursor.fetchall()]
+
+    for nombre, tipo in columnas_requeridas.items():
+        if nombre not in existentes:
+            cursor.execute(f"ALTER TABLE libros ADD COLUMN {nombre} {tipo}")
+            print(f"[OK] Columna agregada a libros: {nombre}")
+
+    # ---- Tabla CATEGORÍAS ----
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS categorias (
+            id_categoria INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT UNIQUE NOT NULL
+        )
+    """)
 
     conexion.commit()
     conexion.close()
