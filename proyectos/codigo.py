@@ -820,25 +820,23 @@ def devolver_libro(usuario):
 
     id_libro, cantidad, titulo_libro, precio_libro, deposito, deposito_pagado, fecha_limite = prestamo_info
 
+    # === Calcular días de retraso ===
+    cursor.execute("SELECT julianday(date('now')) - julianday(?)", (fecha_limite,))
+    dias_retraso = cursor.fetchone()[0]
+    dias_retraso = int(dias_retraso) if dias_retraso and dias_retraso > 0 else 0
+    multa_retraso = dias_retraso * 10  
+    if multa_retraso > 0:
+        print(f"\n⚠ Tienes {dias_retraso} día(s) de retraso. Multa: ${multa_retraso:.2f}")
+
     # === Racha del usuario ===
     cursor.execute("SELECT racha FROM usuarios WHERE id = ?", (usuario['id'],))
     racha = cursor.fetchone()[0]
 
-    # === Descuento por racha (solo si dañado o perdido) ===
     descuento_racha = 0
     if racha >= 150:
-        descuento_racha = 0.20  # 20%
+        descuento_racha = 0.20  
     elif racha <= 80:
-        descuento_racha = 0  # sin beneficio
-
-    # === Verificar si hubo retraso ===
-    cursor.execute("SELECT julianday(date('now')) - julianday(?)", (fecha_limite,))
-    dias_retraso = cursor.fetchone()[0]
-    dias_retraso = int(dias_retraso) if dias_retraso and dias_retraso > 0 else 0
-
-    multa_retraso = dias_retraso * 10  # por ejemplo RD$10 por día
-    if multa_retraso > 0:
-        print(f"\n⚠ Tienes {dias_retraso} día(s) de retraso. Multa: ${multa_retraso:.2f}")
+        descuento_racha = 0
 
     # === Registrar estado de devolución ===
     print("\n¿En qué estado devuelves el libro?")
@@ -850,23 +848,20 @@ def devolver_libro(usuario):
     if estado_opcion == "1":
         estado_libro = "devuelto"
         monto_base = 0
-
     elif estado_opcion == "2":
         estado_libro = "dañado"
         monto_base = precio_libro * 0.50 * cantidad
-
     elif estado_opcion == "3":
         estado_libro = "perdido"
-        monto_base = precio_libro * cantidad  # 100%
-
+        monto_base = precio_libro * cantidad
     else:
         print("Opción inválida.")
         conexion.close()
         return
 
-    # === Aplicar descuento por racha (si aplica) ===
+    # === Aplicar descuento por racha ===
     if estado_libro in ["dañado", "perdido"] and descuento_racha > 0:
-        monto_base = monto_base * (1 - descuento_racha)
+        monto_base *= (1 - descuento_racha)
         print(f"✔ Se aplicó descuento de {descuento_racha*100:.0f}% por racha.")
 
     # === Sumar multa por retraso ===
@@ -921,6 +916,7 @@ def devolver_libro(usuario):
 
     finally:
         conexion.close()
+
 
 
 
