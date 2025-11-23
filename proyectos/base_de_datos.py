@@ -94,6 +94,26 @@ def actualizar_tablas():
             cursor.execute(f"ALTER TABLE libros ADD COLUMN {nombre} {tipo}")
             print(f"[OK] Columna agregada a libros: {nombre}")
 
+# === Tabla de préstamos y depósito ===
+def guardar_deposito(id_usuario, id_libro, monto):
+    conexion = conectar()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute("""
+            INSERT INTO depositos (id_usuario, id_libro, monto, fecha)
+            VALUES (?, ?, ?, datetime('now'))
+        """, (id_usuario, id_libro, monto))
+
+        conexion.commit()
+        print("Depósito registrado correctamente.")
+
+    except Exception as e:
+        print("Error al guardar el depósito:", e)
+
+    finally:
+        conexion.close()
+
     # ---- Tabla CATEGORÍAS ----
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS categorias (

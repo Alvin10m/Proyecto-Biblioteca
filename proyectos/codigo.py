@@ -414,15 +414,19 @@ def actualizar_tablas():
 
     # === Columna para manejar racha del usuario ===
     agregar_columna_si_no_existe('usuarios', 'racha', 'INTEGER DEFAULT 100')
-    # === Columna para fecha límite en préstamos ===
 
+    # === Columna para fecha límite en préstamos ===
     agregar_columna_si_no_existe('prestamos', 'fecha_limite', 'TEXT')
 
     # === Columna para registrar déposito en préstamos ===
-    agregar_columna_si_no_existe('prestamos', 'deposito', 'REAL DEFAULT 0.0')
+    agregar_columna_si_no_existe('prestamos', 'deposito', 'REAL DEFAULT 0')
 
     # === Columna para registrar pago ===
     agregar_columna_si_no_existe('prestamos', 'deposito_pagado', 'INTEGER DEFAULT 0')
+
+    # === Columna para registrar monto cobrado en devoluciones ===
+    agregar_columna_si_no_existe('prestamos', 'monto_cobrado', 'REAL DEFAULT 0')
+
 
 # === Ver libros por categorías ===
 def ver_libros_por_categoria():
