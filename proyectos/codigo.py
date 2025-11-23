@@ -2,6 +2,13 @@ import sqlite3
 from datetime import datetime
 from base_de_datos import conectar, crear_tablas, actualizar_tablas
 import json
+import pandas as pd
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+
 
 #utlidades#
 def exportar_usuarios_a_json():
@@ -401,10 +408,21 @@ def actualizar_tablas():
     """
     Revisa y agrega columnas faltantes automáticamente.
     """
-    
-# === Columna para manejar reservas en libros ===
+
+    # === Columna para manejar reservas en libros ===
     agregar_columna_si_no_existe('libros', 'cantidad_reservada', 'INTEGER DEFAULT 0')
 
+    # === Columna para manejar racha del usuario ===
+    agregar_columna_si_no_existe('usuarios', 'racha', 'INTEGER DEFAULT 100')
+    # === Columna para fecha límite en préstamos ===
+
+    agregar_columna_si_no_existe('prestamos', 'fecha_limite', 'TEXT')
+
+    # === Columna para registrar déposito en préstamos ===
+    agregar_columna_si_no_existe('prestamos', 'deposito', 'REAL DEFAULT 0.0')
+
+    # === Columna para registrar pago ===
+    agregar_columna_si_no_existe('prestamos', 'deposito_pagado', 'INTEGER DEFAULT 0')
 
 # === Ver libros por categorías ===
 def ver_libros_por_categoria():
@@ -502,6 +520,19 @@ def solicitar_prestamo(usuario):
     conexion = conectar()
     cursor = conexion.cursor()
 
+    # === Verificar préstamos vencidos ===
+    cursor.execute("""
+        SELECT COUNT(*) 
+        FROM prestamos
+        WHERE id_usuario = ? AND estado = 'aprobado' AND fecha_limite < date('now')
+    """, (usuario['id'],))
+    prestamos_vencidos = cursor.fetchone()[0]
+
+    if prestamos_vencidos > 0:
+        print(f"No puedes solicitar un nuevo préstamo. Tienes {prestamos_vencidos} libro(s) vencido(s) sin devolver.")
+        conexion.close()
+        return
+
     print("\n=== SOLICITAR PRÉSTAMO ===")
     print("¿Desea buscar por:")
     print("1. Título de libro")
@@ -509,7 +540,6 @@ def solicitar_prestamo(usuario):
     opcion = input("→ ")
 
     if opcion == "2":
-        # Buscar por categoría
         cursor.execute("SELECT id_categoria, nombre FROM categorias")
         categorias = cursor.fetchall()
         if not categorias:
@@ -541,25 +571,19 @@ def solicitar_prestamo(usuario):
             return
 
         print("\nLibros disponibles en esa categoría:")
-
-        
         for libro in libros:
             id_libro, titulo, autor, cantidad_disponible, cantidad_reservada = libro
-
-            # Determinar estado
             if cantidad_disponible > 0:
                 estado = "Disponible"
             elif cantidad_reservada > 0:
                 estado = "Reservado"
             else:
                 estado = "Prestado"
-
             print(
                 f"ID: {id_libro} — {titulo} ({autor}) — "
                 f"Disponibles: {cantidad_disponible} — Reservados: {cantidad_reservada} — Estado: {estado}"
             )
 
-        
         try:
             id_libro = int(input("\nIngrese el ID del libro que desea solicitar: "))
         except ValueError:
@@ -568,7 +592,6 @@ def solicitar_prestamo(usuario):
             return
 
     else:
-        # Buscar por título
         titulo = input("Título del libro que desea solicitar: ")
         cursor.execute("""
             SELECT id_libro, titulo, cantidad_disponible, cantidad_reservada
@@ -583,11 +606,9 @@ def solicitar_prestamo(usuario):
             return
 
         id_libro, titulo_libro, disponible, reservados = libro
-
         estado = "Disponible" if disponible > 0 else ("Reservado" if reservados > 0 else "Prestado")
         if disponible <= 0:
             print(f"El libro '{titulo_libro}' no está disponible actualmente. Estado: {estado}")
-            # Preguntar si quiere reservar
             if input("¿Desea reservarlo? (s/n): ").lower() == "s":
                 try:
                     cantidad_reservar = int(input("¿Cuántos ejemplares desea reservar?: "))
@@ -603,7 +624,7 @@ def solicitar_prestamo(usuario):
             conexion.close()
             return
 
-    # Solicitar cantidad de préstamo
+    # === Cantidad solicitada ===
     try:
         cantidad_deseada = int(input("¿Cuántos ejemplares desea solicitar?: "))
     except ValueError:
@@ -611,129 +632,594 @@ def solicitar_prestamo(usuario):
         conexion.close()
         return
 
-    cursor.execute("SELECT cantidad_disponible, titulo FROM libros WHERE id_libro = ?", (id_libro,))
+    cursor.execute("SELECT cantidad_disponible, titulo, precio FROM libros WHERE id_libro = ?", (id_libro,))
     libro_info = cursor.fetchone()
+
     if not libro_info:
         print("Libro no encontrado.")
         conexion.close()
         return
 
-    cantidad_disponible, titulo_libro = libro_info
+    cantidad_disponible, titulo_libro, precio_libro = libro_info
 
     if cantidad_deseada > cantidad_disponible:
         print(f"Solo hay {cantidad_disponible} ejemplares disponibles de '{titulo_libro}'.")
         conexion.close()
         return
 
-    try:
-        # Registrar préstamo
-        cursor.execute("""
-            INSERT INTO prestamos (id_usuario, id_libro, fecha_prestamo, cantidad_prestada, estado)
-            VALUES (?, ?, date('now'), ?, 'pendiente')
-        """, (usuario['id'], id_libro, cantidad_deseada))
+    # === Obtener racha ===
+    cursor.execute("SELECT racha FROM usuarios WHERE id = ?", (usuario['id'],))
+    racha = cursor.fetchone()[0]
 
-        # Actualizar cantidad disponible
+    # === Depósito obligatorio si racha <= 80 ===
+    deposito = 0
+    if racha <= 80:
+        deposito = precio_libro * 0.40
+        print(f"\nTu racha es {racha}. Debes pagar un depósito obligatorio de: ${deposito:.2f}")
+
+        if cantidad_deseada > 1:
+            print("Como tu racha es baja, solo puedes solicitar 1 ejemplar.")
+            cantidad_deseada = 1
+
+        pagar = input(f"¿Desea pagar ahora el depósito de ${deposito:.2f}? (s/n): ").lower()
+
+        if pagar != 's':
+            print("No puedes continuar sin pagar el depósito.")
+            conexion.close()
+            return
+
+        cursor.execute("""
+            INSERT INTO depositos (id_usuario, id_libro, monto, fecha)
+            VALUES (?, ?, ?, datetime('now'))
+        """, (usuario['id'], id_libro, deposito))
+        conexion.commit()
+        print("Depósito registrado correctamente.")
+
+    # === Beneficios según racha ===
+    dias_extra = 0
+    beneficios = {
+        "entrega_domicilio": 0,
+        "descuento_reposicion": 0.0
+    }
+
+    if 150 < racha < 200:
+        dias_extra = 1
+        beneficios["entrega_domicilio"] = 1
+        beneficios["descuento_reposicion"] = 0.2
+    elif racha >= 200:
+        dias_extra = 2
+        beneficios["entrega_domicilio"] = 1
+        beneficios["descuento_reposicion"] = 0.2
+
+    # === Registrar préstamo ===
+    try:
+        cursor.execute("""
+            INSERT INTO prestamos (
+                id_usuario, id_libro, fecha_prestamo, cantidad_prestada, estado, deposito,
+                entrega_domicilio, descuento_reposicion, deposito_pagado
+            )
+            VALUES (?, ?, date('now'), ?, 'pendiente', ?, ?, ?, 0)
+        """, (
+            usuario['id'], id_libro, cantidad_deseada, deposito,
+            beneficios["entrega_domicilio"], beneficios["descuento_reposicion"]
+        ))
+
+        # Fecha límite
+        fecha_limite_sql = "+2 days" if usuario['tipo'] == "estudiante" else "+5 days"
+
+        cursor.execute(f"""
+            UPDATE prestamos
+            SET fecha_limite = date('now', '{fecha_limite_sql}', '+{dias_extra} days')
+            WHERE id = (SELECT MAX(id) FROM prestamos)
+        """)
+
+        # Marcar que pagó depósito
+        if deposito > 0:
+            cursor.execute("""
+                UPDATE prestamos
+                SET deposito_pagado = 1
+                WHERE id = (SELECT MAX(id) FROM prestamos)
+            """)
+            conexion.commit()
+
+        # Actualizar disponibilidad
         cursor.execute("""
             UPDATE libros
             SET cantidad_disponible = cantidad_disponible - ?
             WHERE id_libro = ?
         """, (cantidad_deseada, id_libro))
 
-        # ===== ACTUALIZAR ESTADO DEL LIBRO =====
-        cursor.execute("SELECT cantidad_disponible, cantidad_reservada FROM libros WHERE id_libro = ?", (id_libro,))
-        cantidad_final, cantidad_reservada = cursor.fetchone()
+        # Reducir reservas
+        cursor.execute("SELECT cantidad_reservada FROM libros WHERE id_libro = ?", (id_libro,))
+        cantidad_reservada = cursor.fetchone()[0]
 
-        if cantidad_final == 0 and cantidad_reservada > 0:
+        if cantidad_reservada > 0:
+            reducir = min(cantidad_deseada, cantidad_reservada)
+            cursor.execute("""
+                UPDATE libros
+                SET cantidad_reservada = cantidad_reservada - ?
+                WHERE id_libro = ?
+            """, (reducir, id_libro))
+
+        # Actualizar estado final del libro
+        cursor.execute("""
+            SELECT cantidad_disponible, cantidad_reservada 
+            FROM libros WHERE id_libro = ?
+        """, (id_libro,))
+        cant_final, cant_reservada = cursor.fetchone()
+
+        if cant_final == 0 and cant_reservada > 0:
+            estado = "reservado"
+        elif cant_final == 0:
+            estado = "prestado"
+        else:
+            estado = "disponible"
+
+        cursor.execute("UPDATE libros SET estado = ? WHERE id_libro = ?", (estado, id_libro))
+
+        conexion.commit()
+        print(f"\nSolicitud registrada: {cantidad_deseada} ejemplar(es) de '{titulo_libro}'.")
+
+    except sqlite3.Error as e:
+        conexion.rollback()
+        print(f"Error al registrar el préstamo: {e}")
+
+    finally:
+        conexion.close()
+
+
+# === Devolución de libros ===
+
+def devolver_libro(usuario):
+    conexion = conectar()
+    cursor = conexion.cursor()
+
+    # === Obtener préstamos activos del usuario ===
+    cursor.execute("""
+        SELECT p.id, l.titulo, p.cantidad_prestada, l.precio, p.deposito, p.deposito_pagado
+        FROM prestamos p
+        JOIN libros l ON p.id_libro = l.id_libro
+        WHERE p.id_usuario = ? AND p.estado = 'aprobado'
+    """, (usuario['id'],))
+    prestamos = cursor.fetchall()
+
+    if not prestamos:
+        print("No tienes préstamos activos.")
+        conexion.close()
+        return
+
+    print("\n=== DEVOLUCIÓN DE LIBROS ===")
+    for p in prestamos:
+        print(f"ID {p[0]} — {p[1]} — Cantidad: {p[2]} — Precio: ${p[3]:.2f}")
+
+    try:
+        id_prestamo = int(input("\nIngrese el ID del préstamo que desea devolver: "))
+    except ValueError:
+        print("ID inválido.")
+        conexion.close()
+        return
+
+    # === Verificar préstamo seleccionado ===
+    cursor.execute("""
+        SELECT p.id_libro, p.cantidad_prestada, l.titulo, l.precio,
+               p.deposito, p.deposito_pagado, p.fecha_limite
+        FROM prestamos p
+        JOIN libros l ON p.id_libro = l.id_libro
+        WHERE p.id = ? AND p.id_usuario = ?
+    """, (id_prestamo, usuario['id']))
+    prestamo_info = cursor.fetchone()
+
+    if not prestamo_info:
+        print("Préstamo no encontrado.")
+        conexion.close()
+        return
+
+    id_libro, cantidad, titulo_libro, precio_libro, deposito, deposito_pagado, fecha_limite = prestamo_info
+
+    # === Racha del usuario ===
+    cursor.execute("SELECT racha FROM usuarios WHERE id = ?", (usuario['id'],))
+    racha = cursor.fetchone()[0]
+
+    # === Descuento por racha (solo si dañado o perdido) ===
+    descuento_racha = 0
+    if racha >= 150:
+        descuento_racha = 0.20  # 20%
+    elif racha <= 80:
+        descuento_racha = 0  # sin beneficio
+
+    # === Verificar si hubo retraso ===
+    cursor.execute("SELECT julianday(date('now')) - julianday(?)", (fecha_limite,))
+    dias_retraso = cursor.fetchone()[0]
+    dias_retraso = int(dias_retraso) if dias_retraso and dias_retraso > 0 else 0
+
+    multa_retraso = dias_retraso * 10  # por ejemplo RD$10 por día
+    if multa_retraso > 0:
+        print(f"\n⚠ Tienes {dias_retraso} día(s) de retraso. Multa: ${multa_retraso:.2f}")
+
+    # === Registrar estado de devolución ===
+    print("\n¿En qué estado devuelves el libro?")
+    print("1. En buen estado")
+    print("2. Dañado (50% del precio)")
+    print("3. Perdido (100% del precio)")
+    estado_opcion = input("→ ")
+
+    if estado_opcion == "1":
+        estado_libro = "devuelto"
+        monto_base = 0
+
+    elif estado_opcion == "2":
+        estado_libro = "dañado"
+        monto_base = precio_libro * 0.50 * cantidad
+
+    elif estado_opcion == "3":
+        estado_libro = "perdido"
+        monto_base = precio_libro * cantidad  # 100%
+
+    else:
+        print("Opción inválida.")
+        conexion.close()
+        return
+
+    # === Aplicar descuento por racha (si aplica) ===
+    if estado_libro in ["dañado", "perdido"] and descuento_racha > 0:
+        monto_base = monto_base * (1 - descuento_racha)
+        print(f"✔ Se aplicó descuento de {descuento_racha*100:.0f}% por racha.")
+
+    # === Sumar multa por retraso ===
+    monto_total = monto_base + multa_retraso
+
+    # === Restar depósito si fue pagado ===
+    if deposito_pagado == 1:
+        monto_total = max(0, monto_total - deposito)
+        print(f"✔ Se descontó depósito pagado: ${deposito:.2f}")
+
+    print(f"\nMonto total a pagar: ${monto_total:.2f}")
+
+    try:
+        # === Actualizar préstamo ===
+        cursor.execute("""
+            UPDATE prestamos
+            SET estado = ?, monto_cobrado = ?, dias_retraso = ?
+            WHERE id = ?
+        """, (estado_libro, monto_total, dias_retraso, id_prestamo))
+
+        # === Actualizar inventario ===
+        if estado_libro != "perdido":
+            cursor.execute("""
+                UPDATE libros
+                SET cantidad_disponible = cantidad_disponible + ?
+                WHERE id_libro = ?
+            """, (cantidad, id_libro))
+
+        # === Actualizar estado general del libro ===
+        cursor.execute("""
+            SELECT cantidad_disponible, cantidad_reservada
+            FROM libros
+            WHERE id_libro = ?
+        """, (id_libro,))
+        disponible, reservada = cursor.fetchone()
+
+        if disponible == 0 and reservada > 0:
             nuevo_estado = "reservado"
-        elif cantidad_final == 0:
+        elif disponible == 0:
             nuevo_estado = "prestado"
         else:
             nuevo_estado = "disponible"
 
         cursor.execute("UPDATE libros SET estado = ? WHERE id_libro = ?", (nuevo_estado, id_libro))
-        
-        conexion.commit()
-        print(f"Se ha registrado la solicitud de {cantidad_deseada} ejemplar(es) de '{titulo_libro}'.")
 
-    except sqlite3.Error as e:
-        print(f"Error al registrar el préstamo: {e}")
+        conexion.commit()
+        print(f"\n✔ Devolución registrada. Estado: {estado_libro}. Total a pagar: ${monto_total:.2f}")
+
+    except Exception as e:
+        conexion.rollback()
+        print("Error al procesar devolución:", e)
+
     finally:
         conexion.close()
 
 
 
-# === Ver estado de préstamos ===
+# === Ver préstamos de un usuario ===
 def ver_prestamos_usuario(usuario):
     """
-    Muestra todos los préstamos del usuario (pendientes, aprobados, etc.)
+    Muestra los préstamos del usuario recibido como diccionario {'id': ..., 'nombre': ..., 'tipo': ...}
     """
     conexion = conectar()
     cursor = conexion.cursor()
+    try:
+        cursor.execute("""
+            SELECT p.id, l.titulo, p.fecha_prestamo, p.fecha_limite, p.cantidad_prestada, p.estado
+            FROM prestamos p
+            LEFT JOIN libros l ON p.id_libro = l.id_libro
+            WHERE p.id_usuario = ?
+            ORDER BY p.fecha_prestamo DESC
+        """, (usuario['id'],))
+        prestamos = cursor.fetchall()
 
-    cursor.execute("""
-        SELECT p.id, l.titulo, p.fecha_prestamo, p.estado
-        FROM prestamos p
-        JOIN libros l ON p.id_libro = l.id_libro
-        WHERE p.id_usuario = ?
-        ORDER BY p.fecha_prestamo DESC
-    """, (usuario['id'],))
+        if not prestamos:
+            print("\nNo tienes préstamos registrados.")
+            return
 
-    prestamos = cursor.fetchall()
-    conexion.close()
+        print("\n=== MIS PRÉSTAMOS ===")
+        for pid, titulo, fecha_prestamo, fecha_limite, cantidad, estado in prestamos:
+            titulo_display = titulo if titulo else "Título desconocido"
+            fecha_prestamo_display = fecha_prestamo if fecha_prestamo else "N/A"
+            fecha_limite_display = fecha_limite if fecha_limite else "N/A"
+            print(
+                f"\nID préstamo: {pid}\n"
+                f"Título: {titulo_display}\n"
+                f"Cantidad: {cantidad}\n"
+                f"Fecha de préstamo: {fecha_prestamo_display}\n"
+                f"Fecha límite: {fecha_limite_display}\n"
+                f"Estado: {estado}\n"
+                "-----------------------------------------------"
+            )
 
-    if not prestamos:
-        print("\nNo tienes préstamos registrados.")
-        return
+    except Exception as e:
+        print(f"Error al obtener préstamos: {e}")
+    finally:
+        conexion.close()
 
-    print("\n=== TUS PRÉSTAMOS ===")
-    for prestamo in prestamos:
-        id_prestamo, titulo, fecha, estado = prestamo
-        print(f"ID: {id_prestamo} | Libro: {titulo} | Fecha: {fecha} | Estado: {estado}")
 
-# === Aprobación de préstamos ===
+# === Función para generar PDF ===
+def generar_pdf(df, nombre_archivo="reporte_prestamos.pdf"):
+    """
+    Genera un PDF con tabla de los préstamos.
+    """
+    doc = SimpleDocTemplate(nombre_archivo, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+
+    # === Título ===
+    titulo = Paragraph("Reporte de Préstamos", styles['Title'])
+    elements.append(titulo)
+    elements.append(Spacer(1, 12))
+
+    # === Preparar datos de la tabla ===
+    data = [df.columns.tolist()] + df.values.tolist()
+
+    # === Crear tabla ===
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.grey),
+        ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
+        ('ALIGN',(0,0),(-1,-1),'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('BACKGROUND',(0,1),(-1,-1),colors.beige),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+    ]))
+    elements.append(table)
+
+    # === Construir PDF ===
+    doc.build(elements)
+    print(f"PDF generado: '{nombre_archivo}'")
+
+# === Función para aprobar/rechazar préstamos y generar reportes ===
 def aprobar_prestamos():
-    conn = conectar()
-    cur = conn.cursor()
+    conexion = conectar()
+    cursor = conexion.cursor()
 
-    cur.execute("""
-        SELECT p.id, u.nombre, l.titulo, p.estado
+    try:
+        # === Traer todos los préstamos ===
+        cursor.execute("""
+            SELECT 
+                p.id,
+                p.id_usuario,
+                u.nombre,
+                u.tipo,
+                u.racha,
+                p.id_libro,
+                l.titulo,
+                p.cantidad_prestada,
+                p.fecha_prestamo,
+                p.estado
+            FROM prestamos p
+            LEFT JOIN usuarios u ON p.id_usuario = u.id
+            LEFT JOIN libros l ON p.id_libro = l.id_libro
+            ORDER BY p.fecha_prestamo ASC
+        """)
+        prestamos = cursor.fetchall()
+
+        if not prestamos:
+            print("\nNo hay préstamos registrados.")
+        else:
+            print("\n=== LISTA DE PRÉSTAMOS ===")
+            for p in prestamos:
+                print(
+                    f"\nID PRÉSTAMO: {p[0]}\n"
+                    f"Usuario: {p[2]} (ID: {p[1]})\n"
+                    f"Tipo: {p[3]} | Racha: {p[4]}\n"
+                    f"Libro: {p[6]} (ID: {p[5]})\n"
+                    f"Cantidad: {p[7]} | Fecha: {p[8]} | Estado: {p[9]}\n"
+                    "-----------------------------------------------"
+                )
+
+        # === Procesar préstamos pendientes ===
+        while True:
+            seleccion = input("\nIngrese el ID del préstamo a procesar (o 'q' para salir): ").strip()
+            if seleccion.lower() == 'q':
+                break
+
+            try:
+                id_prestamo = int(seleccion)
+            except ValueError:
+                print("ID inválido.")
+                continue
+
+            cursor.execute("""
+                SELECT id_libro, cantidad_prestada, estado
+                FROM prestamos
+                WHERE id = ?
+            """, (id_prestamo,))
+            fila = cursor.fetchone()
+
+            if not fila:
+                print("Préstamo no encontrado.")
+                continue
+
+            id_libro, cantidad_prestada, estado_actual = fila
+
+            if estado_actual != "pendiente":
+                print("Ese préstamo ya fue procesado.")
+                continue
+
+            accion = input("¿Aprobar (a) / Rechazar (r) / Cancelar (c)?: ").strip().lower()
+
+            if accion == 'a':
+                # === Verificar stock disponible ===
+                cursor.execute("SELECT cantidad_disponible FROM libros WHERE id_libro = ?", (id_libro,))
+                cantidad_disponible = cursor.fetchone()[0]
+
+                if cantidad_disponible >= cantidad_prestada:
+                    cursor.execute("""
+                        UPDATE libros
+                        SET cantidad_disponible = cantidad_disponible - ?
+                        WHERE id_libro = ?
+                    """, (cantidad_prestada, id_libro))
+
+                    cursor.execute("""
+                        SELECT cantidad_disponible, cantidad_reservada
+                        FROM libros
+                        WHERE id_libro = ?
+                    """, (id_libro,))
+                    disponible, reservada = cursor.fetchone()
+
+                    if disponible == 0 and reservada > 0:
+                        nuevo_estado = "reservado"
+                    elif disponible == 0:
+                        nuevo_estado = "prestado"
+                    else:
+                        nuevo_estado = "disponible"
+
+                    cursor.execute("UPDATE libros SET estado = ? WHERE id_libro = ?", (nuevo_estado, id_libro))
+                    cursor.execute("UPDATE prestamos SET estado = 'aprobado' WHERE id = ?", (id_prestamo,))
+                    conexion.commit()
+                    print(f"Préstamo {id_prestamo} aprobado correctamente.")
+                else:
+                    print("No hay suficientes ejemplares disponibles para aprobar este préstamo.")
+
+            elif accion == 'r':
+                try:
+                    cursor.execute("""
+                        UPDATE libros
+                        SET cantidad_disponible = cantidad_disponible + ?
+                        WHERE id_libro = ?
+                    """, (cantidad_prestada, id_libro))
+
+                    cursor.execute("""
+                        SELECT cantidad_disponible, cantidad_reservada
+                        FROM libros
+                        WHERE id_libro = ?
+                    """, (id_libro,))
+                    disponible, reservada = cursor.fetchone()
+
+                    if disponible == 0 and reservada > 0:
+                        nuevo_estado = "reservado"
+                    elif disponible == 0:
+                        nuevo_estado = "prestado"
+                    else:
+                        nuevo_estado = "disponible"
+
+                    cursor.execute("UPDATE libros SET estado = ? WHERE id_libro = ?", (nuevo_estado, id_libro))
+                    cursor.execute("UPDATE prestamos SET estado = 'rechazado' WHERE id = ?", (id_prestamo,))
+                    conexion.commit()
+                    print(f"Préstamo {id_prestamo} rechazado y se devolvieron {cantidad_prestada} ejemplares al inventario.")
+                except Exception as e:
+                    conexion.rollback()
+                    print("Error al rechazar préstamo:", e)
+            else:
+                print("Acción cancelada.")
+
+        # === Generar reporte ===
+        opcion_reporte = input("\nDesea generar un reporte? (Excel, PDF, Ambos, No): ").strip().lower()
+        if opcion_reporte in ['excel', 'pdf', 'ambos']:
+            df = pd.read_sql_query("""
+                SELECT p.id, u.nombre AS usuario, u.tipo, u.racha,
+                       l.titulo AS libro, p.cantidad_prestada AS cantidad,
+                       p.estado, p.fecha_prestamo AS fecha
+                FROM prestamos p
+                LEFT JOIN usuarios u ON p.id_usuario = u.id
+                LEFT JOIN libros l ON p.id_libro = l.id_libro
+                ORDER BY p.fecha_prestamo ASC
+            """, conexion)
+
+            if opcion_reporte in ['excel', 'ambos']:
+                df.to_excel("reporte_prestamos.xlsx", index=False)
+                print("Excel generado: 'reporte_prestamos.xlsx'")
+
+            if opcion_reporte in ['pdf', 'ambos']:
+                generar_pdf(df)
+
+    except Exception as e:
+        print("Error al procesar préstamos:", e)
+    finally:
+        conexion.close()
+
+
+# === Reporte de ingresos ===
+
+def reporte_ingresos():
+    conexion = conectar()
+    cursor = conexion.cursor()
+
+    print("\n=== REPORTE DE INGRESOS ===")
+
+    # === Depósitos ===
+    cursor.execute("""
+        SELECT d.id, u.nombre, l.titulo, d.monto, d.fecha
+        FROM depositos d
+        JOIN usuarios u ON d.id_usuario = u.id
+        JOIN libros l ON d.id_libro = l.id_libro
+        ORDER BY d.fecha DESC
+    """)
+    depositos = cursor.fetchall()
+
+    total_depositos = sum([d[3] for d in depositos]) if depositos else 0
+
+    print("\n--- DEPÓSITOS ---")
+    if depositos:
+        for id_dep, usuario, libro, monto, fecha in depositos:
+            print(f"[{id_dep}] {usuario} — {libro} — ${monto:.2f} — {fecha}")
+    else:
+        print("No hay depósitos registrados.")
+
+    print(f"TOTAL DEPÓSITOS: ${total_depositos:.2f}")
+
+    # === Multas y reposiciones ===
+    cursor.execute("""
+        SELECT p.id, u.nombre, l.titulo, p.monto_cobrado, p.estado, p.fecha_limite
         FROM prestamos p
         JOIN usuarios u ON p.id_usuario = u.id
         JOIN libros l ON p.id_libro = l.id_libro
-        WHERE p.estado = 'pendiente'
+        WHERE p.monto_cobrado > 0
+        ORDER BY p.id DESC
     """)
+    cobros = cursor.fetchall()
 
-    prestamos = cur.fetchall()
+    total_cobros = sum([c[3] for c in cobros]) if cobros else 0
 
-    if not prestamos:
-        print("No hay solicitudes pendientes.")
+    print("\n--- MULTAS Y REPOSICIONES ---")
+    if cobros:
+        for pid, usuario, libro, monto, estado, fecha_limite in cobros:
+            print(f"[{pid}] {usuario} — {libro} — {estado} — ${monto:.2f}")
     else:
-        for p in prestamos:
-            print(f"ID Préstamo: {p[0]} | Usuario: {p[1]} | Libro: {p[2]} | Estado: {p[3]}")
+        print("No hay multas ni reposiciones registradas.")
 
-            decision = input("¿Aprobar este préstamo? (s/n): ").lower()
-            if decision == "s":
-                cur.execute("UPDATE prestamos SET estado = 'aprobado' WHERE id = ?", (p[0],))
-                print("Préstamo aprobado.")
-            else:
-                cur.execute("UPDATE prestamos SET estado = 'rechazado' WHERE id = ?", (p[0],))
+    print(f"TOTAL MULTAS/REPOSICIONES: ${total_cobros:.2f}")
 
-                cur.execute("""
-                    UPDATE libros
-                    SET cantidad_disponible = cantidad_disponible + 1,
-                        estado = CASE 
-                                   WHEN (cantidad_disponible + 1) > 0 THEN 'Disponible'
-                                   ELSE estado
-                                 END
-                    WHERE id_libro = (SELECT id_libro FROM prestamos WHERE id = ?)
-                """, (p[0],))
+    # === Total general ===
+    print("\n===============================")
+    print(f"TOTAL GENERAL: ${total_depositos + total_cobros:.2f}")
+    print("===============================\n")
 
-                print("Préstamo rechazado.")
+    conexion.close()
 
-    conn.commit()
-    conn.close()
 
-# === Menús según usuario===
+# === Menús según tipo de usuario ===
+
 def menu_admin(usuario):
     while True:
         print("\n=== MENÚ DEL ADMINISTRADOR ===")
@@ -780,7 +1266,8 @@ def menu_docente(usuario):
         print("2. Ver libros por categoría")
         print("3. Solicitar préstamo")
         print("4. Ver mis préstamos")
-        print("5. Cerrar sesión")
+        print("5. Devolver libro")
+        print("6. Cerrar sesión")
         opcion = input("→ ")
 
         if opcion == "1":
@@ -792,9 +1279,12 @@ def menu_docente(usuario):
         elif opcion == "4":
             ver_prestamos_usuario(usuario)
         elif opcion == "5":
+            devolver_libro(usuario)  # <-- llamamos a la nueva función
+        elif opcion == "6":
             break
         else:
             print("Opción inválida.")
+
 
 def menu_estudiante(usuario):
     while True:
@@ -803,7 +1293,8 @@ def menu_estudiante(usuario):
         print("2. Ver libros por categoría")
         print("3. Solicitar préstamo")
         print("4. Ver mis préstamos")
-        print("5. Cerrar sesión")
+        print("5. Devolver libro")
+        print("6. Cerrar sesión")
         opcion = input("→ ")
 
         if opcion == "1":
@@ -815,6 +1306,8 @@ def menu_estudiante(usuario):
         elif opcion == "4":
             ver_prestamos_usuario(usuario)
         elif opcion == "5":
+            devolver_libro(usuario)  # <-- llamamos a la nueva función
+        elif opcion == "6":
             break
         else:
             print("Opción inválida.")
