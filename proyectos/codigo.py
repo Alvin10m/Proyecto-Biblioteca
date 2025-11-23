@@ -1069,7 +1069,6 @@ def aprobar_prestamos():
             accion = input("¿Aprobar (a) / Rechazar (r) / Cancelar (c)?: ").strip().lower()
 
             if accion == 'a':
-                # === Verificar stock disponible ===
                 cursor.execute("SELECT cantidad_disponible FROM libros WHERE id_libro = ?", (id_libro,))
                 cantidad_disponible = cursor.fetchone()[0]
 
@@ -1133,7 +1132,7 @@ def aprobar_prestamos():
             else:
                 print("Acción cancelada.")
 
-        # === Generar reporte ===
+        # === Generar reporte al finalizar ===
         opcion_reporte = input("\nDesea generar un reporte? (Excel, PDF, Ambos, No): ").strip().lower()
         if opcion_reporte in ['excel', 'pdf', 'ambos']:
             df = pd.read_sql_query("""
@@ -1146,17 +1145,26 @@ def aprobar_prestamos():
                 ORDER BY p.fecha_prestamo ASC
             """, conexion)
 
+            # Crear carpeta en escritorio
+            escritorio = os.path.join(os.path.expanduser("~"), "Escritorio")
+            carpeta_reportes = os.path.join(escritorio, "reportes")
+            os.makedirs(carpeta_reportes, exist_ok=True)
+
             if opcion_reporte in ['excel', 'ambos']:
-                df.to_excel("reporte_prestamos.xlsx", index=False)
-                print("Excel generado: 'reporte_prestamos.xlsx'")
+                ruta_excel = os.path.join(carpeta_reportes, "reporte_prestamos.xlsx")
+                df.to_excel(ruta_excel, index=False)
+                print(f"Excel generado en: {ruta_excel}")
 
             if opcion_reporte in ['pdf', 'ambos']:
-                generar_pdf(df)
+                ruta_pdf = os.path.join(carpeta_reportes, "reporte_prestamos.pdf")
+                generar_pdf(df, nombre_archivo=ruta_pdf)
+                print(f"PDF generado en: {ruta_pdf}")
 
     except Exception as e:
         print("Error al procesar préstamos:", e)
     finally:
         conexion.close()
+
 
 # === Generar reporte desde el menú de administrador ===
 
