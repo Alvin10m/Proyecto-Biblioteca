@@ -7,7 +7,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-
+import os 
 
 
 #utlidades#
@@ -1158,6 +1158,51 @@ def aprobar_prestamos():
     finally:
         conexion.close()
 
+# === Generar reporte desde el menú de administrador ===
+
+def generar_reporte_admin():
+    import os
+    conexion = conectar()
+    try:
+        df = pd.read_sql_query("""
+            SELECT p.id, u.nombre AS usuario, u.tipo, u.racha,
+                   l.titulo AS libro, p.cantidad_prestada AS cantidad,
+                   p.estado, p.fecha_prestamo AS fecha
+            FROM prestamos p
+            LEFT JOIN usuarios u ON p.id_usuario = u.id
+            LEFT JOIN libros l ON p.id_libro = l.id_libro
+            ORDER BY p.fecha_prestamo ASC
+        """, conexion)
+
+        if df.empty:
+            print("No hay préstamos registrados.")
+            return
+
+        # === Crear carpeta "reportes" en el escritorio ===
+        escritorio = os.path.join(os.path.expanduser("~"), "Escritorio")
+        carpeta_reportes = os.path.join(escritorio, "reportes")
+        if not os.path.exists(carpeta_reportes):
+            os.makedirs(carpeta_reportes)
+        print("Carpeta de reportes en:", carpeta_reportes)
+
+        opcion_reporte = input("¿Desea generar un reporte? (Excel, PDF, Ambos, No): ").strip().lower()
+
+        if opcion_reporte in ['excel', 'ambos']:
+            ruta_excel = os.path.join(carpeta_reportes, "reporte_prestamos.xlsx")
+            df.to_excel(ruta_excel, index=False)
+            print(f"Excel generado en: {ruta_excel}")
+
+        if opcion_reporte in ['pdf', 'ambos']:
+            ruta_pdf = os.path.join(carpeta_reportes, "reporte_prestamos.pdf")
+            generar_pdf(df, nombre_archivo=ruta_pdf)
+
+    except Exception as e:
+        print("Error al generar reporte:", e)
+    finally:
+        conexion.close()
+
+
+
 
 # === Reporte de ingresos ===
 
@@ -1233,7 +1278,8 @@ def menu_admin(usuario):
         print("8. Agregar categoría")
         print("9. Ver categorías")
         print("10. Reabastecer biblioteca")
-        print("11. Cerrar sesión")
+        print("11. Generar reporte en PDF o Excel")
+        print("12. Cerrar sesión")
         opcion = input("→ ")
 
         if opcion == "1":
@@ -1257,6 +1303,8 @@ def menu_admin(usuario):
         elif opcion == "10":
             reabastecer_biblioteca()
         elif opcion == "11":
+            generar_reporte_admin()
+        elif opcion == "12":
             break
 
 def menu_docente(usuario):
@@ -1279,7 +1327,7 @@ def menu_docente(usuario):
         elif opcion == "4":
             ver_prestamos_usuario(usuario)
         elif opcion == "5":
-            devolver_libro(usuario)  # <-- llamamos a la nueva función
+            devolver_libro(usuario)  
         elif opcion == "6":
             break
         else:
@@ -1306,7 +1354,7 @@ def menu_estudiante(usuario):
         elif opcion == "4":
             ver_prestamos_usuario(usuario)
         elif opcion == "5":
-            devolver_libro(usuario)  # <-- llamamos a la nueva función
+            devolver_libro(usuario) 
         elif opcion == "6":
             break
         else:
